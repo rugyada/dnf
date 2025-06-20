@@ -1,0 +1,83 @@
+diff -up dnf5-5.2.6.2/libdnf5/conf/vars.cpp.1~ dnf5-5.2.6.2/libdnf5/conf/vars.cpp
+diff -up dnf5-5.2.6.2/libdnf5/rpm/arch_private.hpp.1~ dnf5-5.2.6.2/libdnf5/rpm/arch_private.hpp
+--- dnf5-5.2.6.2/libdnf5/rpm/arch_private.hpp.1~	2024-09-20 19:41:22.000000000 +0200
++++ dnf5-5.2.6.2/libdnf5/rpm/arch_private.hpp	2024-10-07 21:35:12.433992118 +0200
+@@ -45,7 +45,7 @@ static const struct {
+       nullptr}},
+     {"arm", {"armv5tejl", "armv5tel", "armv5tl", "armv6l", "armv7l", "armv8l", nullptr}},
+     {"armhfp", {"armv6hl", "armv7hl", "armv7hnl", "armv8hl", "armv8hnl", "armv8hcnl", nullptr}},
+-    {"i386", {"i386", "athlon", "geode", "i486", "i586", "i686", nullptr}},
++    {"i386", {"i386", "athlon", "geode", "i486", "i586", "i686", "znver1_32", nullptr}},
+     {"ia64", {"ia64", nullptr}},
+     {"mips", {"mips", nullptr}},
+     {"mipsel", {"mipsel", nullptr}},
+@@ -63,7 +63,7 @@ static const struct {
+     {"sh3", {"sh3", nullptr}},
+     {"sh4", {"sh4", "sh4a", nullptr}},
+     {"sparc", {"sparc", "sparc64", "sparc64v", "sparcv8", "sparcv9", "sparcv9v", nullptr}},
+-    {"x86_64", {"x86_64", "amd64", "ia32e", nullptr}},
++    {"x86_64", {"x86_64", "amd64", "ia32e", "znver1", nullptr}},
+     {"loongarch64", {"loongarch64", nullptr}},
+     {nullptr, {nullptr}}};
+ 
+diff -up dnf5-5.2.6.2/libdnf5/utils/system.cpp.1~ dnf5-5.2.6.2/libdnf5/utils/system.cpp
+--- dnf5-5.2.6.2/libdnf5/utils/system.cpp.1~	2024-10-07 21:36:29.134783012 +0200
++++ dnf5-5.2.6.2/libdnf5/utils/system.cpp	2024-10-07 21:37:35.075461010 +0200
+@@ -45,6 +45,42 @@ void init_lib_rpm(const char * arch) {
+ #define HWCAP_ARM_NEON (1 << 12)
+ #endif
+ 
++#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
++static inline void cpuid(uint32_t op, uint32_t op2, uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx)
++{
++    asm volatile (
++        "cpuid\n"  
++    : "=a" (*eax), "=b" (*ebx), "=c" (*ecx), "=d" (*edx)
++    : "a" (op), "c" (op2));
++}
++
++static int is_ryzen() {
++    uint32_t eax, ebx, ecx, edx;
++    char vendor[13];
++    int family;
++    vendor[12]=0;
++#ifdef __i386__
++    cpuid(0, &eax, &ebx, &ecx, &edx);
++#else
++    cpuid(0, 0, &eax, &ebx, &ecx, &edx);
++#endif
++    memcpy(vendor, &ebx, sizeof(ebx));
++    memcpy(vendor+4, &edx, sizeof(edx));
++    memcpy(vendor+8, &ecx, sizeof(ecx));
++    if (strncmp(vendor, "AuthenticAMD", 12))
++        return 0;
++#ifdef __i386__
++    cpuid(1, &eax, &ebx, &ecx, &edx);
++#else
++    cpuid(1, 0, &eax, &ebx, &ecx, &edx);
++#endif
++    family = (eax>>8)&0xf;
++    if(family == 0xf)
++        family += (eax>>20)&0x7f;
++    return family >= 0x17;
++}
++#endif
++
+ std::string detect_arch() {
+     struct utsname un;
+ 
+@@ -69,6 +105,14 @@ std::string detect_arch() {
+         *modifier++ = endian;
+         *modifier = 0;
+     }
++
++#if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
++    if (!strcmp(un.machine, "x86_64") && is_ryzen()) {
++        /* FIXME we also want to support x86_64_v* here... */
++        return "znver1";
++    }
++#endif
++
+ #ifdef __MIPSEL__
+     // support for little endian MIPS
+     if (!strcmp(un.machine, "mips"))
